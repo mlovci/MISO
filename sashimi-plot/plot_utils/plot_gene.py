@@ -12,6 +12,7 @@ import plotting
 from plotting import show_spines
 from matplotlib.patches import PathPatch 
 from matplotlib.path import Path
+import pysam
 
 
 # Plot MISO events using BAM files and posterior distribution files.
@@ -22,16 +23,22 @@ def plot_density_single(tx_start, tx_end, gene_obj, mRNAs, strand, graphcoords,\
     number_junctions=True, resolution=.5, showXaxis=True, showYaxis=True,\
     showYlabel=True, font_size=6, junction_log_base=10):
 
-    bamfile = sam_utils.load_bam_reads(bam_filename) 
-
-    gene_reads = sam_utils.fetch_bam_reads_in_gene(bamfile, gene_obj.chrom,\
-        tx_start, tx_end, gene_obj)
-    reads, num_raw_reads = sam_utils.sam_parse_reads(gene_reads,\
-        paired_end=paired_end)
-    wiggle, jxns = readsToWiggle(reads, tx_start, tx_end)
-
+#    bamfile = sam_utils.load_bam_reads(bam_filename) 
+#    gene_reads = sam_utils.fetch_bam_reads_in_gene(bamfile, gene_obj.chrom,\
+#        tx_start, tx_end, gene_obj)
+#    reads, num_raw_reads = sam_utils.sam_parse_reads(gene_reads,\
+#        paired_end=paired_end)
+#    wiggle, jxns = readsToWiggle(reads, tx_start, tx_end)
+    bamfile = pysam.Samfile(bam_filename, 'rb')
+    subset_reads = bamfile.fetch(reference=chrom, start=tx_start,end=tx_end)
+    wiggle, jxns =readsToWiggle_pysam(subset_reads,tx_start, tx_end)
     wiggle = 1e3 * wiggle / coverage
- 
+
+    print tx_start
+    print tx_end
+    print jxns
+    print wiggle
+
     if logged:
         wiggle = log10(wiggle + 1)
     
@@ -64,7 +71,7 @@ def plot_density_single(tx_start, tx_end, gene_obj, mRNAs, strand, graphcoords,\
         for s, e in mRNA:
             tmp.extend([s, e])
         sslists.append(tmp)
-
+    print sslists
     for jxn in jxns:
         leftss, rightss = map(int, jxn.split(":"))
 
@@ -289,6 +296,9 @@ def getScaling(tx_start, tx_end, strand, exon_starts, exon_ends,\
 def readsToWiggle(reads, tx_start, tx_end):
 
     read_positions, read_cigars = reads
+    print reads
+    print read_positions
+    
     wiggle = zeros((tx_end - tx_start + 1), dtype='f')
     jxns = {}
     for i in range(len(read_positions)):
@@ -327,6 +337,30 @@ def readsToWiggle(reads, tx_start, tx_end):
                 except:
                     jxns[jxn] = 1 
 
+    return wiggle, jxns
+
+def readsToWiggle_pysam(reads, tx_start, tx_end):
+    wiggle = zeros((tx_end - tx_start + 1), dtype='f')
+    jxns = {}
+    for read in reads:
+        aligned_positions = read.positions
+        for i,pos in enumerate(aligned_positions):
+            if pos < tx_start or pos > tx_end:
+                continue
+            wig_index = pos-tx_start
+            wiggle[wig_index] += 1./read.qlen
+            try:
+                if aligned_positions[i+1] > pos + 1: #if there is a junction coming up
+                    leftss = pos+1
+                    rightss= aligned_positions[i+1]+1
+                    if leftss > tx_start and leftss < tx_end and rightss > tx_start and rightss < tx_end:                      
+                        jxn = ":".join(map(str, [leftss, rightss]))
+                        try:
+                            jxns[jxn] += 1 
+                        except:
+                            jxns[jxn] = 1
+            except:
+                pass
     return wiggle, jxns
 
 
